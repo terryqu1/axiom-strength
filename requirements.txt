@@ -25,6 +25,7 @@ six==1.17.0
 stable_baselines3==2.7.1
 sympy==1.14.0
 torch==2.8.0
+tqdm==4.67.3
 typing_extensions==4.15.0
 tzdata==2026.1
 zipp==3.23.0
