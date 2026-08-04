@@ -1,8 +1,23 @@
-CLI.py
-red_team_daemon.py
-red_team_directive.txt
-plot_training_data.py
-AutogradEngine.cpp
-AutogradEngine.hpp
-TropicalMath.cpp
-TropicalMath.hpp
+# Virtual environments and Python packages
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Build outputs, binaries, and compiled objects
+build/
+bin/
+obj/
+*.o
+*.a
+*.dylib
+*.so
+*.dll
+*.exe
+
+# IDE and Editor files (VS Code, CLion, etc.)
+.vscode/
+.idea/
+*.swp
+*.swo
