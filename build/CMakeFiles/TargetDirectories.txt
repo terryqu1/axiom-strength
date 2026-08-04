@@ -1,0 +1,3 @@
+/Users/terry/powerlifting_RL/build/CMakeFiles/Proj.dir
+/Users/terry/powerlifting_RL/build/CMakeFiles/edit_cache.dir
+/Users/terry/powerlifting_RL/build/CMakeFiles/rebuild_cache.dir
