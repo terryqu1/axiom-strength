@@ -33,3 +33,6 @@ obj/
 .idea/
 *.swp
 *.swo.venv/
+
+.venv/
+venv/
