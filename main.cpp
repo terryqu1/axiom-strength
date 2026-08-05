@@ -133,12 +133,26 @@ int main() {
     // PHASE 3: HALLUCINATE & OPTIMIZE
     // ==========================================
     cout << "\n--- Launching AI Coach (CEM-MPC) ---\n";
-    
-    // Initialize engine: 50 Iterations, 1000 simulated routines per iter, top 100 survive
+
+    // Initialize engine:
+    // 50 iterations, 1000 candidate routines per iteration,
+    // top 100 candidates survive.
     CEM_MPC coach(50, 1000, 100);
-    
-    // Find the perfect 100-day routine to maximize day 100 performance
-    ActionSequence optimal_routine = coach.solve(current_state);
+
+    // Current measured one-repetition maximums.
+    // Replace these whenever the athlete's tested or estimated 1RMs change.
+    constexpr double bench_1rm_lbs = 235.0;
+    constexpr double squat_1rm_lbs = 400.0;
+    constexpr double deadlift_1rm_lbs = 475.0;
+
+    // Optimize from physically calibrated strength values rather than
+    // the particle filter's currently uncalibrated force estimates.
+    ActionSequence optimal_routine = coach.solve_from_1rm_lbs(
+        current_state,
+        bench_1rm_lbs,
+        squat_1rm_lbs,
+        deadlift_1rm_lbs
+    );
 
     // ==========================================
     // PHASE 4: EXPORT TO CSV

@@ -1,246 +1,560 @@
 #pragma once
-#include <vector>
-#include <cmath>
+
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <iomanip>
 #include <iostream>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
 #include "particle_filter.hpp"
-#include "session.hpp"
 #include "box_muller.hpp"
 
-using namespace std;
+// Axiom Strength bounded CEM-MPC rollout model.
+// Version marker makes it easy to verify that the intended header was compiled.
+inline constexpr const char* AXIOM_CEM_MPC_VERSION = "bounded-1rm-v2";
 
-const int HORIZON = 100;
-const int ACTION_DIM = 3; // Bench, Squat, Deadlift
+inline constexpr int HORIZON = 100;
+inline constexpr int ACTION_DIM = 3; // Bench, squat, deadlift
+
+namespace axiom_mpc_detail {
+
+inline constexpr double GRAVITY_MPS2 = 9.80665;
+inline constexpr double KG_TO_LBS = 2.20462262185;
+inline constexpr double LBS_TO_NEWTONS = 0.45359237 * GRAVITY_MPS2;
+inline constexpr double ACTIVE_ACTION_THRESHOLD = 0.20;
+
+// The MPC rollout uses measured 1RMs as physical anchors. Particle-filter latent
+// variables are deliberately not converted directly into pounds or newtons.
+inline constexpr double MAX_100_DAY_GAIN = 0.20;      // +20% hard ceiling
+inline constexpr double MIN_100_DAY_CAPACITY = 0.90;  // -10% hard floor
+inline constexpr double DAILY_DETRAINING = 0.00010;
+inline constexpr double TRAINING_GAIN_RATE = 0.00180;
+inline constexpr double FATIGUE_DECAY_TAU_DAYS = 3.0;
+inline constexpr double FATIGUE_COST_RATE = 0.10;
+inline constexpr double READINESS_FATIGUE_COEFF = 0.08;
+inline constexpr double MAX_NORMALIZED_FATIGUE = 3.0;
+
+inline bool positive_finite(double value) {
+    return std::isfinite(value) && value > 0.0;
+}
+
+inline double force_n_to_lbs(double force_n) {
+    return (force_n / GRAVITY_MPS2) * KG_TO_LBS;
+}
+
+inline double lbs_to_force_n(double pounds) {
+    return pounds * LBS_TO_NEWTONS;
+}
+
+inline double round_to_nearest_5(double pounds) {
+    return std::round(pounds / 5.0) * 5.0;
+}
+
+} // namespace axiom_mpc_detail
 
 struct ActionSequence {
-    // 100 days of [Bench_Intensity, Squat_Intensity, Deadlift_Intensity]
-    double actions[HORIZON][ACTION_DIM]; 
+    // Normalized daily actions: [bench, squat, deadlift].
+    double actions[HORIZON][ACTION_DIM]{};
+};
+
+struct LiftPrescription {
+    int sets = 0;
+    int reps = 0;
+    double load_pct = 0.0;
+};
+
+struct MPC_RolloutState {
+    std::array<double, ACTION_DIM> baseline_force_n{};
+    std::array<double, ACTION_DIM> capacity_force_n{};
+    double fatigue = 0.0; // dimensionless and bounded
+};
+
+struct MPC_TrajectoryEvaluation {
+    double objective = -std::numeric_limits<double>::infinity();
+    double projected_total_force_n = 0.0;
+    double capacity_total_force_n = 0.0;
+    double penalty_score = 0.0;
+    double final_fatigue = 0.0;
+    std::array<double, ACTION_DIM> projected_force_n{};
+    std::array<double, ACTION_DIM> capacity_force_n{};
+};
+
+struct MPC_CandidateTrajectory {
+    MPC_TrajectoryEvaluation evaluation;
+    ActionSequence sequence;
 };
 
 class CEM_MPC {
 private:
-    int num_iterations;
-    int num_samples;
-    int num_elites;
+    int num_iterations_;
+    int num_samples_;
+    int num_elites_;
 
-    // We need a deterministic step for the hallucination so the optimizer has a stable gradient
-    void deterministic_time_integration(Particle* p, double deltaTime) {
-        p->upper.muscle_mass *= exp(-deltaTime / tau_muscle_decay_upper);
-        p->upper.neural_efficiency *= exp(-deltaTime / tau_neural_decay_upper);
-        p->lower.muscle_mass *= exp(-deltaTime / tau_muscle_decay_lower);
-        p->lower.neural_efficiency *= exp(-deltaTime / tau_neural_decay_lower);
-        p->posterior.muscle_mass *= exp(-deltaTime / tau_muscle_decay_posterior);
-        p->posterior.neural_efficiency *= exp(-deltaTime / tau_neural_decay_posterior);
-        p->fatigue *= exp(-deltaTime / tau_fatigue_decay);
+    static LiftPrescription decode_action(double value) {
+        using namespace axiom_mpc_detail;
 
-        // Calculate the resultant force
-        p->upper.peak_force_est = p->alpha * (p->upper.muscle_mass * p->upper.neural_efficiency / (1 + p->fatigue));
-        p->lower.peak_force_est = p->alpha * (p->lower.muscle_mass * p->lower.neural_efficiency / (1 + p->fatigue));
-        p->posterior.peak_force_est = p->alpha * (p->posterior.muscle_mass * p->posterior.neural_efficiency / (1 + p->fatigue));
+        LiftPrescription prescription;
+        if (value <= ACTIVE_ACTION_THRESHOLD) {
+            return prescription;
+        }
+
+        if (value <= 0.50) {
+            prescription.sets = 4;
+            prescription.reps = 8;
+            const double t = (value - 0.20) / 0.30;
+            prescription.load_pct =
+                0.60 + 0.10 * std::clamp(t, 0.0, 1.0);
+        } else if (value <= 0.80) {
+            prescription.sets = 3;
+            prescription.reps = 5;
+            const double t = (value - 0.50) / 0.30;
+            prescription.load_pct =
+                0.72 + 0.13 * std::clamp(t, 0.0, 1.0);
+        } else {
+            prescription.sets = 2;
+            prescription.reps = 3;
+            const double t = (value - 0.80) / 0.20;
+            prescription.load_pct =
+                0.85 + 0.07 * std::clamp(t, 0.0, 1.0);
+        }
+
+        return prescription;
     }
 
-double evaluate_trajectory(Particle state, const ActionSequence& seq) {
-        
-        // Anchor weights to the START of the 100-day block.
-        double block_start_upper = state.upper.peak_force_est;
-        double block_start_lower = state.lower.peak_force_est;
-        double block_start_post  = state.posterior.peak_force_est;
+    static double normalized_training_dose(const LiftPrescription& prescription) {
+        if (prescription.sets <= 0 ||
+            prescription.reps <= 0 ||
+            prescription.load_pct <= 0.0) {
+            return 0.0;
+        }
 
-        double mean_intensity[ACTION_DIM] = {0.0};
+        // Typical sessions remain O(1), preventing the deadlift or any other lift
+        // from receiving disproportionately large state updates.
+        const double volume =
+            static_cast<double>(prescription.sets * prescription.reps) *
+            prescription.load_pct;
+        const double intensity_factor =
+            std::pow(prescription.load_pct / 0.75, 1.5);
+
+        return std::clamp((volume / 24.0) * intensity_factor, 0.0, 1.5);
+    }
+
+    static MPC_RolloutState make_rollout_state(
+        double bench_lbs,
+        double squat_lbs,
+        double deadlift_lbs
+    ) {
+        using namespace axiom_mpc_detail;
+
+        if (!positive_finite(bench_lbs) ||
+            !positive_finite(squat_lbs) ||
+            !positive_finite(deadlift_lbs)) {
+            throw std::invalid_argument(
+                "Bench, squat, and deadlift 1RMs must be positive finite values."
+            );
+        }
+
+        // These broad bounds catch unit mistakes such as passing newtons as pounds.
+        constexpr double MIN_1RM_LBS = 20.0;
+        constexpr double MAX_1RM_LBS = 1500.0;
+        if (bench_lbs < MIN_1RM_LBS || bench_lbs > MAX_1RM_LBS ||
+            squat_lbs < MIN_1RM_LBS || squat_lbs > MAX_1RM_LBS ||
+            deadlift_lbs < MIN_1RM_LBS || deadlift_lbs > MAX_1RM_LBS) {
+            throw std::invalid_argument(
+                "A supplied 1RM is outside 20-1500 lb. Pass measured 1RMs in pounds."
+            );
+        }
+
+        MPC_RolloutState state;
+        state.baseline_force_n = {
+            lbs_to_force_n(bench_lbs),
+            lbs_to_force_n(squat_lbs),
+            lbs_to_force_n(deadlift_lbs)
+        };
+        state.capacity_force_n = state.baseline_force_n;
+        state.fatigue = 0.0;
+        return state;
+    }
+
+    static void apply_training_day(
+        MPC_RolloutState& state,
+        const std::array<double, ACTION_DIM>& actions
+    ) {
+        using namespace axiom_mpc_detail;
+
+        // Recovery occurs each day before the new session's fatigue is added.
+        state.fatigue *= std::exp(-1.0 / FATIGUE_DECAY_TAU_DAYS);
+
+        double total_daily_dose = 0.0;
+
+        for (int lift = 0; lift < ACTION_DIM; ++lift) {
+            const LiftPrescription prescription = decode_action(actions[lift]);
+            const double dose = normalized_training_dose(prescription);
+            total_daily_dose += dose;
+
+            const double baseline = state.baseline_force_n[lift];
+            const double ceiling = baseline * (1.0 + MAX_100_DAY_GAIN);
+            const double floor = baseline * MIN_100_DAY_CAPACITY;
+
+            // Capacity decays slightly without sufficient stimulus.
+            state.capacity_force_n[lift] *= (1.0 - DAILY_DETRAINING);
+
+            if (dose > 0.0) {
+                const double current_relative_gain =
+                    state.capacity_force_n[lift] / baseline - 1.0;
+                const double remaining_gain_fraction = std::clamp(
+                    1.0 - current_relative_gain / MAX_100_DAY_GAIN,
+                    0.0,
+                    1.0
+                );
+                const double recovery_modifier =
+                    std::exp(-0.30 * state.fatigue);
+                const double relative_gain =
+                    TRAINING_GAIN_RATE * dose *
+                    remaining_gain_fraction * recovery_modifier;
+
+                state.capacity_force_n[lift] *= (1.0 + relative_gain);
+            }
+
+            // This clamp is the hard numerical guarantee against force explosion.
+            state.capacity_force_n[lift] = std::clamp(
+                state.capacity_force_n[lift],
+                floor,
+                ceiling
+            );
+        }
+
+        state.fatigue += FATIGUE_COST_RATE * total_daily_dose;
+        state.fatigue = std::clamp(
+            state.fatigue,
+            0.0,
+            MAX_NORMALIZED_FATIGUE
+        );
+    }
+
+    MPC_TrajectoryEvaluation evaluate_trajectory(
+        const MPC_RolloutState& initial_state,
+        const ActionSequence& sequence
+    ) const {
+        using namespace axiom_mpc_detail;
+
+        MPC_RolloutState state = initial_state;
+        std::array<double, ACTION_DIM> mean_intensity{};
+
         int active_training_days = 0;
-        int sbd_days = 0; // Track days where they do all 3 lifts
+        int sbd_days = 0;
+        int consecutive_training_days = 0;
+        int excessive_consecutive_days = 0;
 
-        for (int day = 0; day < HORIZON; day++) {
-            
+        for (int day = 0; day < HORIZON; ++day) {
+            std::array<double, ACTION_DIM> actions{};
             int lifts_today = 0;
 
-            if (seq.actions[day][0] > 0.2) {
-                bench b; 
-                double intensity = 0.65 + ((seq.actions[day][0] - 0.2) / 0.8) * 0.20;
-                b.load = (block_start_upper / 9.81) * intensity; 
-                b.reps = 5; b.rpe = 8; b.incline_bias = 0; b.leverage_bias = 0.3; b.tempo_stress = 0; b.range_of_motion = 0;
-                for (int set = 0; set < 3; set++) visit(BiomechanicalTransitionVisitor{&state}, variant<std::monostate, bench, squat, deadlift>(b));
-                lifts_today++;
-                mean_intensity[0] += seq.actions[day][0];
-            }
-            if (seq.actions[day][1] > 0.2) {
-                squat s; 
-                double intensity = 0.65 + ((seq.actions[day][1] - 0.2) / 0.8) * 0.20;
-                s.load = (block_start_lower / 9.81) * intensity; 
-                s.reps = 5; s.rpe = 8; s.leverage_bias = 0.3; s.tempo_stress = 0; s.stance_width = 0.3; s.range_of_motion = 0;
-                for (int set = 0; set < 3; set++) visit(BiomechanicalTransitionVisitor{&state}, variant<std::monostate, bench, squat, deadlift>(s));
-                lifts_today++;
-                mean_intensity[1] += seq.actions[day][1];
-            }
-            if (seq.actions[day][2] > 0.2) {
-                deadlift d; 
-                double intensity = 0.70 + ((seq.actions[day][2] - 0.2) / 0.8) * 0.20;
-                d.load = (block_start_post / 9.81) * intensity; 
-                d.reps = 5; d.rpe = 8; d.leverage_bias = 1.0; d.stance_width = 0.4; d.tempo_stress = 0;
-                for (int set = 0; set < 3; set++) visit(BiomechanicalTransitionVisitor{&state}, variant<std::monostate, bench, squat, deadlift>(d));
-                lifts_today++;
-                mean_intensity[2] += seq.actions[day][2];
+            for (int lift = 0; lift < ACTION_DIM; ++lift) {
+                actions[lift] = sequence.actions[day][lift];
+                mean_intensity[lift] += actions[lift];
+                if (actions[lift] > ACTIVE_ACTION_THRESHOLD) {
+                    ++lifts_today;
+                }
             }
 
-            if (lifts_today > 0) active_training_days++;
-            if (lifts_today == 3) sbd_days++; 
+            if (lifts_today > 0) {
+                ++active_training_days;
+                ++consecutive_training_days;
+                if (consecutive_training_days > 3) {
+                    ++excessive_consecutive_days;
+                }
+            } else {
+                consecutive_training_days = 0;
+            }
 
-            // Apply daily fatigue recovery and progression
-            deterministic_time_integration(&state, 1.0);
+            if (lifts_today == ACTION_DIM) {
+                ++sbd_days;
+            }
+
+            apply_training_day(state, actions);
         }
 
-        // Variance Calculation (Smoothness)
         double total_variance = 0.0;
-        for (int a = 0; a < ACTION_DIM; a++) mean_intensity[a] /= HORIZON;
-        for (int day = 0; day < HORIZON; day++) {
-            for (int a = 0; a < ACTION_DIM; a++) {
-                double diff = seq.actions[day][a] - mean_intensity[a];
-                total_variance += (diff * diff);
+        for (int lift = 0; lift < ACTION_DIM; ++lift) {
+            mean_intensity[lift] /= static_cast<double>(HORIZON);
+        }
+        for (int day = 0; day < HORIZON; ++day) {
+            for (int lift = 0; lift < ACTION_DIM; ++lift) {
+                const double diff =
+                    sequence.actions[day][lift] - mean_intensity[lift];
+                total_variance += diff * diff;
             }
         }
-        total_variance /= HORIZON; 
+        total_variance /= static_cast<double>(HORIZON);
 
-        // Base Target: Total estimated force at the END of the 100 days
-        double total_force = state.upper.peak_force_est + state.lower.peak_force_est + state.posterior.peak_force_est;
-        
-       // ==========================================
-        // NEW: Exponential Penalty System (No Dead Zones!)
-        // ==========================================
-        double penalty_score = 0.0;
-
-        // 1. Variance Penalty 
-        penalty_score += (total_variance * 2.0); 
-
-        // 2. Heavy SBD Day Penalty 
-        if (sbd_days > 10) penalty_score += (sbd_days - 10) * 0.05;
-
-        // 3. Volume Envelope 
+        double penalty_score = total_variance * 1.5;
+        if (sbd_days > 10) {
+            penalty_score += static_cast<double>(sbd_days - 10) * 0.08;
+        }
         if (active_training_days > 60) {
-            penalty_score += (active_training_days - 60) * 0.05; 
+            penalty_score +=
+                static_cast<double>(active_training_days - 60) * 0.06;
         } else if (active_training_days < 35) {
-            penalty_score += (35 - active_training_days) * 0.05; 
+            penalty_score +=
+                static_cast<double>(35 - active_training_days) * 0.04;
+        }
+        penalty_score +=
+            static_cast<double>(excessive_consecutive_days) * 0.05;
+
+        const double readiness_multiplier =
+            std::exp(-READINESS_FATIGUE_COEFF * state.fatigue);
+
+        MPC_TrajectoryEvaluation result;
+        result.penalty_score = penalty_score;
+        result.final_fatigue = state.fatigue;
+        result.capacity_force_n = state.capacity_force_n;
+
+        for (int lift = 0; lift < ACTION_DIM; ++lift) {
+            result.projected_force_n[lift] =
+                state.capacity_force_n[lift] * readiness_multiplier;
+            result.capacity_total_force_n += state.capacity_force_n[lift];
+            result.projected_total_force_n += result.projected_force_n[lift];
         }
 
-        // e^(-x) smoothly approaches 0 but never hits it. 
-        // A perfect routine has a penalty_score of 0.0, resulting in a multiplier of 1.0!
-        double penalty_multiplier = std::exp(-penalty_score);
-
-        return total_force * penalty_multiplier;
+        result.objective =
+            result.projected_total_force_n * std::exp(-penalty_score);
+        return result;
     }
 
-public:
-    CEM_MPC(int iters = 50, int samples = 500, int elites = 50) 
-        : num_iterations(iters), num_samples(samples), num_elites(elites) {}
+    ActionSequence solve_prepared(const MPC_RolloutState& initial_state) const {
+        using namespace axiom_mpc_detail;
 
-    ActionSequence solve(const Particle& initial_state) {
-        
-        // Distribution parameters: Mean and Standard Deviation for every action on every day
-        double mu[HORIZON][ACTION_DIM];
-        double sigma[HORIZON][ACTION_DIM];
+        double mu[HORIZON][ACTION_DIM]{};
+        double sigma[HORIZON][ACTION_DIM]{};
 
-        // Initialize distributions to the center (0.5) with a wide spread (0.25)
-        for (int d = 0; d < HORIZON; d++) {
-            for (int a = 0; a < ACTION_DIM; a++) {
-                mu[d][a] = 0.5;
-                sigma[d][a] = 0.25;
+        for (int day = 0; day < HORIZON; ++day) {
+            for (int action = 0; action < ACTION_DIM; ++action) {
+                mu[day][action] = 0.35;
+                sigma[day][action] = 0.22;
             }
         }
 
-        ActionSequence best_sequence;
-        double best_reward = -INFINITY;
+        ActionSequence best_sequence{};
+        MPC_TrajectoryEvaluation best_evaluation;
 
-        cout << "Starting CEM-MPC Optimization over " << HORIZON << " days...\n";
+        std::cout << "CEM-MPC model: " << AXIOM_CEM_MPC_VERSION << "\n";
+        std::cout << "Starting CEM-MPC Optimization over "
+                  << HORIZON << " days...\n";
+        std::cout << "Calibrated starting 1RMs: Bench "
+                  << std::round(force_n_to_lbs(initial_state.baseline_force_n[0]))
+                  << " lbs, Squat "
+                  << std::round(force_n_to_lbs(initial_state.baseline_force_n[1]))
+                  << " lbs, Deadlift "
+                  << std::round(force_n_to_lbs(initial_state.baseline_force_n[2]))
+                  << " lbs\n";
 
-        for (int iter = 0; iter < num_iterations; iter++) {
-            vector<pair<double, ActionSequence>> population(num_samples);
+        for (int iteration = 0; iteration < num_iterations_; ++iteration) {
+            std::vector<MPC_CandidateTrajectory> population(
+                static_cast<std::size_t>(num_samples_)
+            );
 
-            // 1. Sample Population
-            for (int s = 0; s < num_samples; s++) {
-                for (int d = 0; d < HORIZON; d++) {
-                    for (int a = 0; a < ACTION_DIM; a++) {
-                        double noise = generateGaussianPoint_cached();
-                        double val = mu[d][a] + noise * sigma[d][a];
-                        population[s].second.actions[d][a] = std::clamp(val, 0.0, 1.0);
+            for (int sample = 0; sample < num_samples_; ++sample) {
+                for (int day = 0; day < HORIZON; ++day) {
+                    for (int action = 0; action < ACTION_DIM; ++action) {
+                        const double noise = generateGaussianPoint_cached();
+                        const double value =
+                            mu[day][action] + noise * sigma[day][action];
+                        population[sample].sequence.actions[day][action] =
+                            std::clamp(value, 0.0, 1.0);
                     }
                 }
-                // 2. Evaluate Trajectory
-                population[s].first = evaluate_trajectory(initial_state, population[s].second);
+
+                population[sample].evaluation = evaluate_trajectory(
+                    initial_state,
+                    population[sample].sequence
+                );
             }
 
-            // 3. Sort Population (descending by reward)
-            std::sort(population.begin(), population.end(), 
-                      [](const auto& a, const auto& b) { return a.first > b.first; });
+            std::sort(
+                population.begin(),
+                population.end(),
+                [](const MPC_CandidateTrajectory& lhs,
+                   const MPC_CandidateTrajectory& rhs) {
+                    return lhs.evaluation.objective > rhs.evaluation.objective;
+                }
+            );
 
-            // Track absolute best
-            if (population[0].first > best_reward) {
-                best_reward = population[0].first;
-                best_sequence = population[0].second;
+            if (population.front().evaluation.objective >
+                best_evaluation.objective) {
+                best_evaluation = population.front().evaluation;
+                best_sequence = population.front().sequence;
             }
 
-            if (iter % 10 == 0) {
-                cout << "  Iter " << iter << " | Best Total Force Est: " << population[0].first << " N\n";
+            if (iteration % 10 == 0) {
+                std::cout << "  Iter " << iteration
+                          << " | Best objective: "
+                          << population.front().evaluation.objective
+                          << " | Projected total: "
+                          << force_n_to_lbs(
+                                 population.front().evaluation.projected_total_force_n
+                             )
+                          << " lb-equivalent"
+                          << " | Final fatigue: "
+                          << population.front().evaluation.final_fatigue
+                          << "\n";
             }
 
-            // 4. Update Distribution (Fit Gaussian to Elites)
-            for (int d = 0; d < HORIZON; d++) {
-                for (int a = 0; a < ACTION_DIM; a++) {
+            for (int day = 0; day < HORIZON; ++day) {
+                for (int action = 0; action < ACTION_DIM; ++action) {
                     double new_mu = 0.0;
-                    for (int e = 0; e < num_elites; e++) {
-                        new_mu += population[e].second.actions[d][a];
+                    for (int elite = 0; elite < num_elites_; ++elite) {
+                        new_mu +=
+                            population[elite].sequence.actions[day][action];
                     }
-                    new_mu /= num_elites;
+                    new_mu /= static_cast<double>(num_elites_);
 
-                    double new_var = 0.0;
-                    for (int e = 0; e < num_elites; e++) {
-                        double diff = population[e].second.actions[d][a] - new_mu;
-                        new_var += diff * diff;
+                    double new_variance = 0.0;
+                    for (int elite = 0; elite < num_elites_; ++elite) {
+                        const double difference =
+                            population[elite].sequence.actions[day][action] -
+                            new_mu;
+                        new_variance += difference * difference;
                     }
-                    new_var /= num_elites;
+                    new_variance /= static_cast<double>(num_elites_);
 
-                    mu[d][a] = new_mu;
-                    
-                    // Add an epsilon (0.02) to sigma to prevent premature convergence (distribution collapse)
-                    sigma[d][a] = sqrt(new_var) + 0.02; 
+                    mu[day][action] = new_mu;
+                    sigma[day][action] =
+                        std::sqrt(new_variance) + 0.015;
                 }
             }
         }
-        
-        cout << "Optimization Complete. Max Projected Total: " << best_reward << " N\n";
-        
-        // --- NEW READOUT: Print the next 5 active sessions with sets/reps ---
-        cout << "\n=== UPCOMING AI-OPTIMIZED ROUTINE ===\n";
+
+        std::cout << "Optimization Complete.\n"
+                  << "  Best objective score: "
+                  << best_evaluation.objective << "\n"
+                  << "  Penalty score: "
+                  << best_evaluation.penalty_score << "\n"
+                  << "  Final normalized fatigue: "
+                  << best_evaluation.final_fatigue << "\n"
+                  << "  Projected readiness-adjusted 1RMs: Bench "
+                  << force_n_to_lbs(best_evaluation.projected_force_n[0])
+                  << " lbs, Squat "
+                  << force_n_to_lbs(best_evaluation.projected_force_n[1])
+                  << " lbs, Deadlift "
+                  << force_n_to_lbs(best_evaluation.projected_force_n[2])
+                  << " lbs\n"
+                  << "  Underlying capacity estimates: Bench "
+                  << force_n_to_lbs(best_evaluation.capacity_force_n[0])
+                  << " lbs, Squat "
+                  << force_n_to_lbs(best_evaluation.capacity_force_n[1])
+                  << " lbs, Deadlift "
+                  << force_n_to_lbs(best_evaluation.capacity_force_n[2])
+                  << " lbs\n";
+
+        std::cout << "\n=== UPCOMING AI-OPTIMIZED ROUTINE ===\n";
         int sessions_printed = 0;
-        
-        for (int day = 0; day < HORIZON; day++) {
-            double bench_int = best_sequence.actions[day][0];
-            double squat_int = best_sequence.actions[day][1];
-            double deadlift_int = best_sequence.actions[day][2];
-            
-            // If any lift is above 0.2, it's considered a training day
-            if (bench_int > 0.2 || squat_int > 0.2 || deadlift_int > 0.2) {
-                cout << "Day " << day + 1 << ": ";
-                
-                // Note: The engine currently evaluates all lifts as 1 set of 5 reps
-                if (bench_int > 0.2) {
-                    double b_load = 60.0 + ((bench_int - 0.2) / 0.8) * 100.0;
-                    cout << "[Bench: 1x5 @ " << round(b_load) * 2.20462 << " lbs] ";
+
+        const std::array<double, ACTION_DIM> baseline_lbs = {
+            force_n_to_lbs(initial_state.baseline_force_n[0]),
+            force_n_to_lbs(initial_state.baseline_force_n[1]),
+            force_n_to_lbs(initial_state.baseline_force_n[2])
+        };
+        const std::array<std::string, ACTION_DIM> lift_names = {
+            "Bench", "Squat", "Deadlift"
+        };
+
+        for (int day = 0; day < HORIZON; ++day) {
+            bool active_day = false;
+            for (int lift = 0; lift < ACTION_DIM; ++lift) {
+                if (best_sequence.actions[day][lift] >
+                    ACTIVE_ACTION_THRESHOLD) {
+                    active_day = true;
+                    break;
                 }
-                if (squat_int > 0.2) {
-                    double s_load = 100.0 + ((squat_int - 0.2) / 0.8) * 120.0;
-                    cout << "[Squat: 1x5 @ " << round(s_load) * 2.20462 << " lbs] ";
+            }
+            if (!active_day) {
+                continue;
+            }
+
+            std::cout << "Day " << day + 1 << ": ";
+            for (int lift = 0; lift < ACTION_DIM; ++lift) {
+                const LiftPrescription prescription =
+                    decode_action(best_sequence.actions[day][lift]);
+                if (prescription.sets == 0) {
+                    continue;
                 }
-                if (deadlift_int > 0.2) {
-                    double d_load = 120.0 + ((deadlift_int - 0.2) / 0.8) * 140.0;
-                    cout << "[Deadlift: 1x5 @ " << round(d_load) * 2.20462 << " lbs] ";
-                }
-                cout << "\n";
-                
-                sessions_printed++;
-                if (sessions_printed >= 5) break; // Stop after 5 sessions
+
+                const double prescribed_lbs = round_to_nearest_5(
+                    baseline_lbs[lift] * prescription.load_pct
+                );
+                std::cout << "[" << lift_names[lift] << ": "
+                          << prescription.sets << "x"
+                          << prescription.reps << " @ "
+                          << prescribed_lbs << " lbs] ";
+            }
+            std::cout << "\n";
+
+            ++sessions_printed;
+            if (sessions_printed >= 5) {
+                break;
             }
         }
-        cout << "=====================================\n";
+
+        if (sessions_printed == 0) {
+            std::cout <<
+                "No active sessions were selected above the action threshold.\n";
+        }
+        std::cout << "=====================================\n";
 
         return best_sequence;
     }
+
+public:
+    CEM_MPC(int iterations = 50, int samples = 500, int elites = 50)
+        : num_iterations_(iterations),
+          num_samples_(samples),
+          num_elites_(elites) {
+        if (num_iterations_ <= 0 ||
+            num_samples_ <= 0 ||
+            num_elites_ <= 0) {
+            throw std::invalid_argument(
+                "CEM iterations, samples, and elites must be positive."
+            );
+        }
+        if (num_elites_ > num_samples_) {
+            throw std::invalid_argument(
+                "The number of CEM elites cannot exceed the sample count."
+            );
+        }
+    }
+
+    // Mandatory safe entry point. The historical state remains available to the
+    // caller, but its uncalibrated latent quantities are not interpreted as force.
+    ActionSequence solve_from_1rm_lbs(
+        const Particle& historical_state,
+        double bench_lbs,
+        double squat_lbs,
+        double deadlift_lbs
+    ) const {
+        (void)historical_state;
+        return solve_prepared(
+            make_rollout_state(bench_lbs, squat_lbs, deadlift_lbs)
+        );
+    }
+
+    // Convenience overload when no Particle object is needed by the caller.
+    ActionSequence solve_from_1rm_lbs(
+        double bench_lbs,
+        double squat_lbs,
+        double deadlift_lbs
+    ) const {
+        return solve_prepared(
+            make_rollout_state(bench_lbs, squat_lbs, deadlift_lbs)
+        );
+    }
+
+    // Intentionally disabled: latent particle states are not calibrated physical
+    // force measurements. This prevents accidental reintroduction of the runaway
+    // muscle_mass * neural_efficiency force equation inside MPC.
+    ActionSequence solve(const Particle&) const = delete;
 };
