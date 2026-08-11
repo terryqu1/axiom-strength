@@ -12,7 +12,7 @@
 
 #include "particle_filter.hpp"
 #include "box_muller.hpp"
-
+ 
 // Axiom Strength bounded CEM-MPC rollout model.
 // Version marker makes it easy to verify that the intended header was compiled.
 inline constexpr const char* AXIOM_CEM_MPC_VERSION = "bounded-1rm-v2";
