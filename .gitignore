@@ -8,11 +8,7 @@ TropicalMath.cpp
 TropicalMath.hpp
 
 # data files
-post_vitruve_training_log.csv
-reversed_training_log.csv
-training_log.csv
-training_impulse.csv
-2024_training_logs.csv
+data_files/
 
 # Virtual environments and Python packages
 .venv/

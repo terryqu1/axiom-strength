@@ -33,7 +33,7 @@ double getDaysBetween(const string& date1, const string& date2) {
 }
 
 int main() {
-    string filename = "post_vitruve_training_log.csv";
+    string filename = "data_files/post_vitruve_training_log.csv";
 
     // ==========================================
     // PHASE 1: TRACK HISTORICAL LATENT STATE
