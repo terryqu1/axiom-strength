@@ -231,6 +231,7 @@ A standard Matérn (5/2) kernel has the form:
 
 $$
 k(x,x')
+$$
 =======
 
 \sigma^2
@@ -330,32 +331,6 @@ The particle-filter and GP outputs are not yet sufficiently calibrated for their
 ---
 
 ## 5. Repository Structure
-
-Replace this section with the repository's actual directory and file names before publishing.
-
-A clean target structure would look like:
-
-```text
-axiom-strength/
-├── README.md
-├── include/
-│   ├── particle_filter/
-│   ├── gaussian_process/
-│   ├── dynamics/
-│   ├── pomdp/
-│   └── cem_mpc/
-├── src/
-│   ├── particle_filter/
-│   ├── gaussian_process/
-│   ├── dynamics/
-│   ├── pomdp/
-│   └── cem_mpc/
-├── tests/
-├── examples/
-├── data/
-├── docs/
-└── scripts/
-```
 
 Conceptually, the main modules are:
 
