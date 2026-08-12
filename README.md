@@ -405,26 +405,19 @@ Keeping the core implementation dependency-free makes the numerical and control 
 ```bash
 git clone <repository-url>
 cd axiom-strength
-
-# Replace with the repository's actual build commands.
 ```
 
 If the repository uses CMake, for example:
 
 ```bash
 mkdir build
-cd build
-cmake ..
-cmake --build .
+cmake --build build
 ```
-
-Do not publish those commands unless they match the actual project.
 
 ### Run
 
 ```bash
-# Replace with the real executable and arguments.
-./<executable>
+./build/Proj
 ```
 
 ---
