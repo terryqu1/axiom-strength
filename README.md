@@ -51,7 +51,7 @@ load / reps / rest
         └──────────► new observations
 ```
 
-The research poster describes this overall architecture as Bayesian state estimation, Gaussian-process dynamics, and Cross-Entropy Method Model Predictive Control.
+The overall architecture can be described as Bayesian state estimation, Gaussian-process dynamics, and Cross-Entropy Method Model Predictive Control.
 
 ### Current Implementation
 
@@ -211,8 +211,6 @@ These actions generate modeled impulses affecting quantities such as:
 * neural adaptation,
 * fatigue.
 
-The research poster documents these biomechanical transitions as part of the C++ engine.
-
 The numerical parameters governing these effects remain subject to empirical calibration.
 
 ---
@@ -258,7 +256,7 @@ At present, however, the numerical state predictions from this subsystem are **n
 
 The repository also contains a prototype **Cross-Entropy Method Model Predictive Controller** intended to explore long-horizon training optimization.
 
-The prototype searches candidate 100-day bench / squat / deadlift trajectories. The research poster describes the optimization process as:
+The prototype searches candidate 100-day bench / squat / deadlift trajectories. The optimization process is as follows:
 
 1. sample candidate action sequences,
 2. simulate and score them,
@@ -342,7 +340,6 @@ CEM-MPC Trajectory Search
 POMDP / System Coordination
 ```
 
-The research poster identifies these major engine responsibilities.
 
 ---
 
@@ -443,8 +440,6 @@ Planned / relevant tests include:
 * action clamping,
 * rollout scoring.
 
-These validation targets are documented in the research poster.
-
 ### Stage 2 — Physiological Calibration
 
 Fit the state-estimation and dynamics parameters using longitudinal athlete data.
@@ -523,8 +518,6 @@ The current research artifact demonstrates the components necessary to explore:
 * latent-state estimation,
 * probabilistic biological simulation,
 * long-horizon trajectory optimization.
-
-The research poster describes a working artifact capable of producing upcoming candidate sessions.
 
 A conceptual output format might look like:
 
