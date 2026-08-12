@@ -154,10 +154,9 @@ The particle filter is the current mechanism for representing uncertainty over h
 
 A collection of particles represents possible athlete states:
 
-$$
+```math
 x^{(i)}
-=======
-
+=
 [
 \text{muscle},
 \text{neural},
@@ -165,7 +164,7 @@ x^{(i)}
 \text{force},
 \dots
 ]
-$$
+```
 
 The research prototype uses **1,000 state hypotheses**.
 
@@ -229,23 +228,21 @@ The current research formulation uses:
 
 A standard Matérn (5/2) kernel has the form:
 
-$$
+```math
 k(x,x')
-$$
-=======
-
+=
 \sigma^2
 \left(
 1+\sqrt{5}r+\frac{5}{3}r^2
 \right)
 e^{-\sqrt{5}r}
-$$
+```
 
 where
 
-$$
-r=\frac{|x-x'|}{\ell}
-$$
+```math
+r=\frac{\|x-x'\|}{\ell}
+```
 
 The intended role of the GP is to model uncertain state transitions:
 
