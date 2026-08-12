@@ -561,7 +561,6 @@ Day 3: ...
 ...
 ```
 
-Replace this example with literal output from the repository before publication.
 
 No empirical claim should currently be made that Axiom Strength:
 
