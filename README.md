@@ -342,12 +342,9 @@ POMDP / System Coordination
 
 
 ---
-
 ## 6. Build and Run
 
-Axiom Strength is written in **C++20** and intentionally avoids external library dependencies.
-
-The project uses **CMake** to configure and build the executable.
+Axiom Strength is written in **C++20**, uses **CMake**, and has no external library dependencies beyond the C++ standard library.
 
 ### Requirements
 
@@ -377,7 +374,7 @@ cmake ..
 cmake --build .
 ```
 
-The project's `CMakeLists.txt` configures the build and creates an executable named:
+The project's `CMakeLists.txt` creates an executable named:
 
 ```text
 Proj
@@ -385,43 +382,65 @@ Proj
 
 inside the `build/` directory.
 
+### Runtime Data Requirement
+
+The public repository **does not include the private longitudinal training logs used by the current prototype**.
+
+As a result, the project can be configured and compiled from the public repository, but the current executable cannot complete its normal data-driven execution without the required training-log input.
+
+This data was intentionally excluded to avoid publishing private personal training records.
+
 ### Run
 
-After building:
+With the required local data available in the expected format/location:
 
 ```bash
 ./build/Proj
 ```
 
-If you are already inside the `build/` directory:
+or, from inside the build directory:
 
 ```bash
 ./Proj
 ```
 
-### Clean Rebuild
+Without the private training data, the executable should not be expected to reproduce the full current research run.
 
-To rebuild from a clean configuration:
+### Reproducibility Status
 
-```bash
-rm -rf build
-mkdir build
-cd build
-cmake ..
-cmake --build .
-```
+The repository currently provides:
 
-Then run:
+* public source code,
+* CMake build configuration,
+* dependency-free C++20 compilation,
+* the implemented research architecture and algorithms.
 
-```bash
-./Proj
-```
+It does **not currently provide**:
 
-### Development Note
+* the private athlete training logs used by the prototype,
+* a public synthetic replacement dataset,
+* a fully reproducible end-to-end example run.
 
-The project deliberately keeps the core implementation dependency-free beyond the C++ standard library.
+A future improvement is to add a small synthetic or anonymized example dataset so that users can exercise the full pipeline without access to private records.
 
-Using CMake provides a reproducible build process while keeping the underlying numerical and control code portable across standard C++20 toolchains.
+---
+
+## Reproducibility Limitation
+
+The current public repository is **build-reproducible but not yet fully run-reproducible**.
+
+The executable depends on private longitudinal training logs that have been deliberately removed from version control.
+
+This means an external user can inspect and compile the implementation, but cannot reproduce the complete current execution path from the public repository alone.
+
+Planned improvements include:
+
+* adding a synthetic athlete dataset,
+* documenting the expected input schema,
+* providing a minimal public example configuration,
+* adding a demo mode that does not require private data.
+
+The private dataset will remain excluded from the repository.
 
 ---
 
