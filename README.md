@@ -2,7 +2,9 @@
 
 **A research prototype for adaptive athletic periodization using probabilistic state estimation, uncertainty-aware dynamics, and model-predictive control.**
 
-Axiom Strength explores whether strength-training periodization can be reframed as a **closed-loop control problem under uncertainty**: estimate an athlete's hidden physiological state from noisy observations, model how that state may evolve, and eventually use a controller to select future training trajectories while respecting fatigue and safety constraints. The project was developed through the **Trustworthy, Intelligent, and Explainable Robotics (TIER) Lab at Hunter College, CUNY**, under the mentorship of **Dr. Raj Korpan**.
+Axiom Strength explores whether strength-training periodization can be reframed as a **closed-loop control problem under uncertainty**: estimate an athlete's hidden physiological state from noisy observations, model how that state may evolve, and eventually use a controller to select future training trajectories while respecting fatigue and safety constraints.
+
+The project was developed through the **Trustworthy, Intelligent, and Explainable Robotics (TIER) Lab at Hunter College, CUNY**, under the mentorship of **Dr. Raj Korpan**.
 
 ---
 
@@ -93,13 +95,13 @@ Integration is therefore intentionally deferred until the upstream model has bee
 
 ## 3. Mathematical Formulation and Core Algorithms
 
-## POMDP Formulation
+### POMDP Formulation
 
 The broader system can be viewed as a partially observable Markov decision process.
 
 The research formulation includes:
 
-### State (S)
+#### State (S)
 
 Latent athlete variables such as:
 
@@ -108,7 +110,7 @@ Latent athlete variables such as:
 * fatigue,
 * estimated peak force.
 
-### Actions (A)
+#### Actions (A)
 
 Possible actions include:
 
@@ -119,7 +121,7 @@ Possible actions include:
 
 with continuous intensity choices.
 
-### Observations (O)
+#### Observations (O)
 
 Observable signals may include:
 
@@ -132,7 +134,7 @@ Observable signals may include:
 
 Conceptually:
 
-[
+$$
 o_t
 \rightarrow
 b_t(s)
@@ -140,19 +142,19 @@ b_t(s)
 p(s_{t+1}\mid s_t,a_t)
 \rightarrow
 \text{trajectory optimization}
-]
+$$
 
 where an observation updates a belief over hidden physiological state, a transition model predicts future state distributions, and a controller eventually selects actions.
 
 ---
 
-## Particle Filter
+### Particle Filter
 
 The particle filter is the current mechanism for representing uncertainty over hidden physiological state.
 
 A collection of particles represents possible athlete states:
 
-[
+$$
 x^{(i)}
 =======
 
@@ -163,7 +165,7 @@ x^{(i)}
 \text{force},
 \dots
 ]
-]
+$$
 
 The research prototype uses **1,000 state hypotheses**.
 
@@ -171,7 +173,7 @@ Given an observation, each particle receives a likelihood weight based on how we
 
 A representative Gaussian observation model is:
 
-[
+$$
 w_i
 \propto
 \exp
@@ -181,8 +183,8 @@ w_i
 }{
 2\sigma_{\text{obs}}^2
 }
-\right).
-]
+\right)
+$$
 
 The resulting weights are normalized and used for resampling, producing an updated belief over latent state.
 
@@ -190,19 +192,19 @@ The particle filter should currently be understood as an **experimental state-es
 
 ---
 
-## Physiological Transition Model
+### Physiological Transition Model
 
 Training actions influence modeled physiological state.
 
 The prototype represents bench, squat, and deadlift training in terms involving:
 
-[
+$$
 \text{load}
 \times
 \text{repetitions}
 \times
-\text{RPE}.
-]
+\text{RPE}
+$$
 
 These actions generate modeled impulses affecting quantities such as:
 
@@ -216,7 +218,7 @@ The numerical parameters governing these effects remain subject to empirical cal
 
 ---
 
-## Gaussian-Process Dynamics
+### Gaussian-Process Dynamics
 
 A Gaussian process is used to represent uncertainty in forward physiological dynamics.
 
@@ -227,7 +229,7 @@ The current research formulation uses:
 
 A standard Matérn (5/2) kernel has the form:
 
-[
+$$
 k(x,x')
 =======
 
@@ -235,26 +237,26 @@ k(x,x')
 \left(
 1+\sqrt{5}r+\frac{5}{3}r^2
 \right)
-e^{-\sqrt{5}r},
-]
+e^{-\sqrt{5}r}
+$$
 
 where
 
-[
-r=\frac{|x-x'|}{\ell}.
-]
+$$
+r=\frac{|x-x'|}{\ell}
+$$
 
 The intended role of the GP is to model uncertain state transitions:
 
-[
-p(s_{t+1}\mid s_t,a_t).
-]
+$$
+p(s_{t+1}\mid s_t,a_t)
+$$
 
 At present, however, the numerical state predictions from this subsystem are **not fed directly into CEM-MPC** because they have not yet been calibrated sufficiently against longitudinal athlete data.
 
 ---
 
-## CEM-MPC Prototype
+### CEM-MPC Prototype
 
 The repository also contains a prototype **Cross-Entropy Method Model Predictive Controller** intended to explore long-horizon training optimization.
 
@@ -274,7 +276,7 @@ The objective favors projected force while penalizing undesirable behavior such 
 * excessive heavy training,
 * unsafe volume.
 
-### Important implementation provenance
+#### Important implementation provenance
 
 The **current CEM-MPC prototype was generated entirely using generative-AI coding tools**.
 
@@ -329,6 +331,32 @@ The particle-filter and GP outputs are not yet sufficiently calibrated for their
 
 ## 5. Repository Structure
 
+Replace this section with the repository's actual directory and file names before publishing.
+
+A clean target structure would look like:
+
+```text
+axiom-strength/
+├── README.md
+├── include/
+│   ├── particle_filter/
+│   ├── gaussian_process/
+│   ├── dynamics/
+│   ├── pomdp/
+│   └── cem_mpc/
+├── src/
+│   ├── particle_filter/
+│   ├── gaussian_process/
+│   ├── dynamics/
+│   ├── pomdp/
+│   └── cem_mpc/
+├── tests/
+├── examples/
+├── data/
+├── docs/
+└── scripts/
+```
+
 Conceptually, the main modules are:
 
 ```text
@@ -348,77 +376,83 @@ The research poster identifies these major engine responsibilities.
 
 ## 6. Build and Run
 
-The research materials describe the inference engine as **zero-dependency / bare-metal C++**, but they do not specify the current repository's compiler version, C++ standard, operating-system assumptions, or build commands.
+Axiom Strength is written in **C++20** and intentionally avoids external library dependencies.
 
-These should be taken directly from the repository rather than inferred.
+The project uses **CMake** to configure and build the executable.
 
-### Dependencies
+### Requirements
 
-Axiom Strength is written in C++20 and is intentionally designed with no external library dependencies.
+* C++20-compatible compiler
+* `g++` or `clang++`
+* CMake
+* standard C++ library
+* no external libraries
 
-Requirements
-C++20-compatible compiler
-g++ or clang++
-Standard C++ library
-No external libraries required
-Compile with g++
-g++ -std=c++20 -O2 -Wall -Wextra -pedantic \
-    <source-files> \
-    -o axiom_strength
-Compile with Clang
-clang++ -std=c++20 -O2 -Wall -Wextra -pedantic \
-    <source-files> \
-    -o axiom_strength
-
-Replace <source-files> with the actual source files or source directory pattern used by the repository.
-
-For example, if all implementation files are stored under src/:
-
-g++ -std=c++20 -O2 -Wall -Wextra -pedantic \
-    src/*.cpp \
-    -Iinclude \
-    -o axiom_strength
-
-or:
-
-clang++ -std=c++20 -O2 -Wall -Wextra -pedantic \
-    src/*.cpp \
-    -Iinclude \
-    -o axiom_strength
-Run
-./axiom_strength
-
-If the repository contains multiple executables or separate demonstrations for the particle-filter / GP subsystem and the detached CEM-MPC prototype, document those commands individually here.
-
-Design Constraint
-
-The project deliberately avoids third-party runtime dependencies.
-
+```text
 Language:      C++20
 Compiler:      g++ or clang++
+Build system:  CMake
 Dependencies:  Standard library only
-
-Keeping the core implementation dependency-free makes the numerical and control logic easier to inspect, reproduce, test, and eventually relate to formally specified implementation invariants.
-
-### Build
-
-```bash
-git clone <repository-url>
-cd axiom-strength
+Executable:    Proj
+Build folder:  build/
 ```
 
-If the repository uses CMake, for example:
+### Configure and Build
+
+From the repository root:
 
 ```bash
-mkdir build
-cmake --build build
+mkdir -p build
+cd build
+cmake ..
+cmake --build .
 ```
+
+The project's `CMakeLists.txt` configures the build and creates an executable named:
+
+```text
+Proj
+```
+
+inside the `build/` directory.
 
 ### Run
+
+After building:
 
 ```bash
 ./build/Proj
 ```
+
+If you are already inside the `build/` directory:
+
+```bash
+./Proj
+```
+
+### Clean Rebuild
+
+To rebuild from a clean configuration:
+
+```bash
+rm -rf build
+mkdir build
+cd build
+cmake ..
+cmake --build .
+```
+
+Then run:
+
+```bash
+./Proj
+```
+
+### Development Note
+
+The project deliberately keeps the core implementation dependency-free beyond the C++ standard library.
+
+Using CMake provides a reproducible build process while keeping the underlying numerical and control code portable across standard C++20 toolchains.
 
 ---
 
@@ -543,7 +577,7 @@ Day 3: ...
 ...
 ```
 
-> Replace this example with literal output from the repository before publication.
+Replace this example with literal output from the repository before publication.
 
 No empirical claim should currently be made that Axiom Strength:
 
@@ -572,8 +606,6 @@ Potential issues include:
 * unrealistic uncertainty,
 * long-horizon drift.
 
----
-
 ### Model Error Can Be Amplified by Optimization
 
 This is the reason the CEM-MPC remains detached.
@@ -582,11 +614,7 @@ An optimizer searches aggressively for states and actions that maximize its obje
 
 If the underlying world model is inaccurate, the optimizer can exploit **model error** instead of discovering genuinely useful strategies.
 
-Therefore:
-
 > **The upstream model must earn integration with the optimizer through calibration and validation.**
-
----
 
 ### Gaussian-Process Biological Fidelity
 
@@ -597,8 +625,6 @@ One proposed direction is replacing or augmenting the GP with a **Physics-Inform
 * tissue capacity,
 * fatigue recovery,
 * neuromuscular efficiency.
-
----
 
 ### Formal Verification
 
@@ -611,8 +637,6 @@ The research goal is to eventually:
 * prove unsafe states unreachable under specified assumptions,
 * map mathematical safety statements to implementation invariants.
 
----
-
 ### Real-World Data
 
 Future work includes:
@@ -621,8 +645,6 @@ Future work includes:
 * integrating wearable signals,
 * calibrating parameters per athlete,
 * comparing predicted and observed trajectories.
-
----
 
 ### Comparative Benchmarking
 
@@ -636,7 +658,7 @@ The system eventually needs direct comparison against:
 
 ## 10. Attribution and Development Provenance
 
-## Research Context
+### Research Context
 
 **Terry Qu**
 Research Fellow
@@ -648,9 +670,7 @@ Hunter College, City University of New York
 
 The project was conducted under Dr. Korpan's mentorship through the TIER Lab.
 
----
-
-## My Contributions
+### My Contributions
 
 My contributions include the research and system-level direction of Axiom Strength, including work on:
 
@@ -666,9 +686,7 @@ My contributions include the research and system-level direction of Axiom Streng
 
 Specific implementation provenance should be documented component-by-component rather than assuming all code in the repository was authored manually.
 
----
-
-## CEM-MPC Provenance
+### CEM-MPC Provenance
 
 The current **CEM-MPC prototype was generated entirely using generative-AI coding tools**.
 
@@ -686,9 +704,7 @@ It should therefore be regarded as:
 
 > **an AI-generated prototype used within a human-directed research and system-design process.**
 
----
-
-## AI-Assisted Software Development
+### AI-Assisted Software Development
 
 Generative-AI coding tools were used as part of the project's development workflow.
 
