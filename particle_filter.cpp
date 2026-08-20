@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <tuple>
 #include <variant>
 #include <numeric>
 #include <span>
@@ -56,7 +57,7 @@ void showParticles(const Particle* particle) {
     }
 }
 
-// transition function
+
 
 void transition(Particle* particles, const Action& current_action, int num_particles, double deltaTime) {
     for (int i = 0; i < num_particles; i++) {
@@ -174,6 +175,22 @@ matrix compute_cholesky(matrix& K, int n) {
     return L;
 }
 
+// Calculate the individualized parameters for the athlete
+tuple<double, double, double> calculateParameters(Particle* particles, int num_particles) {
+    double morph_gain_rate = 0;
+    double tau_fatigue_rate = 0;
+    double neural_gain_rate = 0;
+    for (int i = 0; i < num_particles; ++i) {
+        morph_gain_rate += particles[i].weight * exp(particles[i].log_gain_morph);
+        neural_gain_rate += particles[i].weight * exp(particles[i].log_gain_neuro);
+        tau_fatigue_rate += particles[i].weight * exp(particles[i].log_tau);
+        
+    }
+    auto params = std::make_tuple(morph_gain_rate, neural_gain_rate, tau_fatigue_rate);
+
+    return params;
+}
+
 // The new Gaussian Transition Function
 void gaussian_transition(Particle* particles, const Action& action, int num_particles, double dt, GaussianProcess& gp) {
     
@@ -195,7 +212,7 @@ void gaussian_transition(Particle* particles, const Action& action, int num_part
 
     // 4. Sample and Apply Correlated Noise 
     // We apply this variance independently across each of your latent dimensions
-    const int NUM_STATE_DIMS = 7; // e.g., upper/lower/post (muscle+neural) + fatigue
+    const int NUM_STATE_DIMS = 9; // e.g., upper/lower/post (muscle+neural) + fatigue
 
     for (int state_dim = 0; state_dim < NUM_STATE_DIMS; ++state_dim) {
         

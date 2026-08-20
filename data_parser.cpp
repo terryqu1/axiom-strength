@@ -207,22 +207,31 @@ vector<Session> initializeLifts(string training_log_file) {
                     }
                     break;
                 }
-                case 8: // total sleep minutes
+                case 8:
+                    new_obs.bodyweight = stod(parsed_string);
+                    break;
+                case 9:
+                    new_obs.active_energy_burned = stod(parsed_string);
+                    break;
+                case 10:
+                    new_obs.basal_energy_burned = stod(parsed_string);
+                    break;
+                case 11: // total sleep minutes
                     new_obs.total_sleep_minutes = stod(parsed_string);
                     break;
-                case 12:
+                case 15:
                     new_obs.hrv = stod(parsed_string);
                     break;
-                case 15: // set mean velocity m/s
+                case 18: // set mean velocity m/s
                     new_obs.set_mean_velocity = stod(parsed_string);
                     break;
-                case 21:
+                case 24:
                     new_obs.velocity_loss = stod(parsed_string);
                     break;
-                case 22: // set mean force N
+                case 25: // set mean force N
                     new_obs.set_mean_force = stod(parsed_string);
                     break;
-                case 24:
+                case 27:
                     new_obs.peak_force = stod(parsed_string);
             }
             counter++;

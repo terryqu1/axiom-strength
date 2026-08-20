@@ -33,7 +33,7 @@ double getDaysBetween(const string& date1, const string& date2) {
 }
 
 int main() {
-    string filename = "data_files/post_vitruve_training_log.csv";
+    string filename = "data_files/training_log.csv";
 
     // ==========================================
     // PHASE 1: TRACK HISTORICAL LATENT STATE
@@ -46,7 +46,7 @@ int main() {
         return 1;
     }
 
-    int num_particles = 1000;
+    int num_particles = 100;
     Particle* particles = new Particle[num_particles];
     initializeParticles(particles, num_particles);
     
@@ -145,10 +145,11 @@ int main() {
     constexpr double squat_1rm_lbs = 400.0;
     constexpr double deadlift_1rm_lbs = 475.0;
 
+    tuple<double, double, double> physiological_rates = calculateParameters(particles, num_particles);
     // Optimize from physically calibrated strength values rather than
     // the particle filter's currently uncalibrated force estimates.
     ActionSequence optimal_routine = coach.solve_from_1rm_lbs(
-        current_state,
+        physiological_rates,
         bench_1rm_lbs,
         squat_1rm_lbs,
         deadlift_1rm_lbs

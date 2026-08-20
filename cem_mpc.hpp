@@ -30,8 +30,6 @@ inline constexpr double ACTIVE_ACTION_THRESHOLD = 0.20;
 inline constexpr double MAX_100_DAY_GAIN = 0.20;      // +20% hard ceiling
 inline constexpr double MIN_100_DAY_CAPACITY = 0.90;  // -10% hard floor
 inline constexpr double DAILY_DETRAINING = 0.00010;
-inline constexpr double TRAINING_GAIN_RATE = 0.00180;
-inline constexpr double FATIGUE_DECAY_TAU_DAYS = 3.0;
 inline constexpr double FATIGUE_COST_RATE = 0.10;
 inline constexpr double READINESS_FATIGUE_COEFF = 0.08;
 inline constexpr double MAX_NORMALIZED_FATIGUE = 3.0;
@@ -68,6 +66,9 @@ struct LiftPrescription {
 struct MPC_RolloutState {
     std::array<double, ACTION_DIM> baseline_force_n{};
     std::array<double, ACTION_DIM> capacity_force_n{};
+    double morph_gain_rate = 0.0;
+    double neural_gain_rate = 0.0;
+    double fatigue_decay_tau_days = 0.0;
     double fatigue = 0.0; // dimensionless and bounded
 };
 
@@ -144,7 +145,10 @@ private:
     static MPC_RolloutState make_rollout_state(
         double bench_lbs,
         double squat_lbs,
-        double deadlift_lbs
+        double deadlift_lbs,
+        double morph_gain_rate,
+        double neural_gain_rate,
+        double fatigue_decay_tau_days
     ) {
         using namespace axiom_mpc_detail;
 
@@ -174,6 +178,9 @@ private:
             lbs_to_force_n(deadlift_lbs)
         };
         state.capacity_force_n = state.baseline_force_n;
+        state.neural_gain_rate = neural_gain_rate;
+        state.morph_gain_rate = morph_gain_rate;
+        state.fatigue_decay_tau_days = fatigue_decay_tau_days;
         state.fatigue = 0.0;
         return state;
     }
@@ -185,7 +192,7 @@ private:
         using namespace axiom_mpc_detail;
 
         // Recovery occurs each day before the new session's fatigue is added.
-        state.fatigue *= std::exp(-1.0 / FATIGUE_DECAY_TAU_DAYS);
+        state.fatigue *= std::exp(-1.0 / state.fatigue_decay_tau_days);
 
         double total_daily_dose = 0.0;
 
@@ -212,7 +219,7 @@ private:
                 const double recovery_modifier =
                     std::exp(-0.30 * state.fatigue);
                 const double relative_gain =
-                    TRAINING_GAIN_RATE * dose *
+                    state.morph_gain_rate * dose *
                     remaining_gain_fraction * recovery_modifier;
 
                 state.capacity_force_n[lift] *= (1.0 + relative_gain);
@@ -529,25 +536,27 @@ public:
     // Mandatory safe entry point. The historical state remains available to the
     // caller, but its uncalibrated latent quantities are not interpreted as force.
     ActionSequence solve_from_1rm_lbs(
-        const Particle& historical_state,
+        Particle* historical_state,
+        tuple<double, double, double> physiological_rates,
         double bench_lbs,
         double squat_lbs,
         double deadlift_lbs
     ) const {
-        (void)historical_state;
+        (void) historical_state;
         return solve_prepared(
-            make_rollout_state(bench_lbs, squat_lbs, deadlift_lbs)
+            make_rollout_state(bench_lbs, squat_lbs, deadlift_lbs, std::get<0>(physiological_rates), std::get<1>(physiological_rates), std::get<2>(physiological_rates))
         );
     }
 
     // Convenience overload when no Particle object is needed by the caller.
     ActionSequence solve_from_1rm_lbs(
+        tuple<double, double, double> physiological_rates,
         double bench_lbs,
         double squat_lbs,
         double deadlift_lbs
     ) const {
         return solve_prepared(
-            make_rollout_state(bench_lbs, squat_lbs, deadlift_lbs)
+            make_rollout_state(bench_lbs, squat_lbs, deadlift_lbs, std::get<0>(physiological_rates), std::get<1>(physiological_rates), std::get<2>(physiological_rates))
         );
     }
 

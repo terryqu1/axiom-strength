@@ -69,11 +69,14 @@ struct alignas(32) Particle {
             double alpha;   // global scaling constant (for peak_force_est) that the engine will learn itself
             double beta;    // another global scaling constant (for vel_loss_est) that the engine will learn itself
             double fatigue;
+            double log_tau = std::log(3.0); // log form of tau fatigue rate
+            double log_gain_morph = std::log(0.0018); // log form of training rate gain
+            double log_gain_neuro = std::log(0.0025); // neural efficiency gains
             local_state upper;
             local_state lower;
             local_state posterior;
         };
-        double state_vec[15];
+        double state_vec[17];
     };
     double weight;
     Particle(): state_vec{0}, weight(1.0 / NUM_PARTICLES) {}
@@ -120,26 +123,38 @@ const double noise_sigma = 0.1;
 
 struct BiomechanicalTransitionVisitor {
     Particle* particle;
+    double energy_deficit;
+
+
     void operator() (const std::monostate&) const {
         ;
     }
     void operator() (const bench& active_bench) const {
-        double upper_stimulus_hypertrophy = biological_scaling_factor * (active_bench.load * active_bench.rpe) * (active_bench.reps) * ((1+ w_incline*active_bench.incline_bias) * (1+w_tempo*active_bench.tempo_stress) * (1+w_leverage*active_bench.leverage_bias) * (1+w_range*active_bench.range_of_motion));
-        double upper_stimulus_neural = biological_scaling_factor * (w_intensity * active_bench.load * active_bench.rpe) * (active_bench.reps) * ((1+ w_incline*active_bench.incline_bias) * (1+w_tempo*active_bench.tempo_stress) * (1+w_leverage*active_bench.leverage_bias) * (1+w_range*active_bench.range_of_motion));
+        double morph_rate = std::exp(particle->log_gain_morph);
+        double neural_rate = std::exp(particle->log_gain_neuro);
+
+        double upper_stimulus_hypertrophy = morph_rate * (active_bench.load * active_bench.rpe) * (active_bench.reps) * ((1+ w_incline*active_bench.incline_bias) * (1+w_tempo*active_bench.tempo_stress) * (1+w_leverage*active_bench.leverage_bias) * (1+w_range*active_bench.range_of_motion));
+        double upper_stimulus_neural = neural_rate * (w_intensity * active_bench.load * active_bench.rpe) * (active_bench.reps) * ((1+ w_incline*active_bench.incline_bias) * (1+w_tempo*active_bench.tempo_stress) * (1+w_leverage*active_bench.leverage_bias) * (1+w_range*active_bench.range_of_motion));
         particle->upper.muscle_mass += upper_stimulus_hypertrophy;
         particle->upper.neural_efficiency += upper_stimulus_neural;
         particle->fatigue += (active_bench.load * active_bench.reps * active_bench.rpe) * fatigue_scaling_factor;
     };
     void operator() (const squat& active_squat) const {
-        double lower_stimulus_hypertrophy = biological_scaling_factor * (active_squat.load * active_squat.rpe) * (active_squat.reps) * ((1+s_stance*active_squat.stance_width) * (1+s_tempo*active_squat.tempo_stress) * (1+s_leverage*active_squat.leverage_bias) * (1+s_rom*active_squat.range_of_motion));
-        double lower_stimulus_neural = biological_scaling_factor * (s_intensity * active_squat.load * active_squat.rpe) * (active_squat.reps) * ((1+s_stance*active_squat.stance_width) * (1+s_tempo*active_squat.tempo_stress) * (1+s_leverage*active_squat.leverage_bias) * (1+s_rom*active_squat.range_of_motion));
+        double morph_rate = std::exp(particle->log_gain_morph);
+        double neural_rate = std::exp(particle->log_gain_neuro);
+
+        double lower_stimulus_hypertrophy = morph_rate * (active_squat.load * active_squat.rpe) * (active_squat.reps) * ((1+s_stance*active_squat.stance_width) * (1+s_tempo*active_squat.tempo_stress) * (1+s_leverage*active_squat.leverage_bias) * (1+s_rom*active_squat.range_of_motion));
+        double lower_stimulus_neural = neural_rate * (s_intensity * active_squat.load * active_squat.rpe) * (active_squat.reps) * ((1+s_stance*active_squat.stance_width) * (1+s_tempo*active_squat.tempo_stress) * (1+s_leverage*active_squat.leverage_bias) * (1+s_rom*active_squat.range_of_motion));
         particle->lower.muscle_mass += lower_stimulus_hypertrophy;
         particle->lower.neural_efficiency += lower_stimulus_neural;
         particle->fatigue += (active_squat.load * active_squat.reps * active_squat.rpe) * fatigue_scaling_factor;
     };
     void operator() (const deadlift& active_deadlift) const {
-        double posterior_stimulus_hypertrophy = biological_scaling_factor * (active_deadlift.load * active_deadlift.rpe) * (active_deadlift.reps) * ((1+d_stance*active_deadlift.stance_width) * (1+d_tempo*active_deadlift.tempo_stress) * (1+d_leverage*active_deadlift.leverage_bias));
-        double posterior_stimulus_neural = biological_scaling_factor * (d_intensity * active_deadlift.load * active_deadlift.rpe) * (active_deadlift.reps) * ((1+d_stance*active_deadlift.stance_width) * (1+d_tempo*active_deadlift.tempo_stress) * (1+d_leverage*active_deadlift.leverage_bias));
+        double morph_rate = std::exp(particle->log_gain_morph);
+        double neural_rate = std::exp(particle->log_gain_neuro);
+
+        double posterior_stimulus_hypertrophy = morph_rate * (active_deadlift.load * active_deadlift.rpe) * (active_deadlift.reps) * ((1+d_stance*active_deadlift.stance_width) * (1+d_tempo*active_deadlift.tempo_stress) * (1+d_leverage*active_deadlift.leverage_bias));
+        double posterior_stimulus_neural = neural_rate * (d_intensity * active_deadlift.load * active_deadlift.rpe) * (active_deadlift.reps) * ((1+d_stance*active_deadlift.stance_width) * (1+d_tempo*active_deadlift.tempo_stress) * (1+d_leverage*active_deadlift.leverage_bias));
         particle->posterior.muscle_mass += posterior_stimulus_hypertrophy;
         particle->posterior.neural_efficiency += posterior_stimulus_neural;
         particle->fatigue += (active_deadlift.load * active_deadlift.reps * active_deadlift.rpe) * fatigue_scaling_factor;
@@ -151,7 +166,7 @@ struct BiomechanicalTransitionVisitor {
         particle->lower.neural_efficiency = particle->lower.neural_efficiency * exp(-deltaTime / tau_neural_decay_lower);
         particle->posterior.muscle_mass = particle->posterior.muscle_mass * exp(-deltaTime / tau_muscle_decay_posterior);
         particle->posterior.neural_efficiency = particle->posterior.neural_efficiency * exp(-deltaTime / tau_neural_decay_posterior);
-        particle->fatigue = particle->fatigue * exp(-deltaTime / tau_fatigue_decay);
+        particle->fatigue = particle->fatigue * exp(-deltaTime / std::exp(particle->log_tau));
     
         particle->alpha *= std::clamp(1 + generateGaussianPoint_cached() * sqrt(deltaTime) * 0.01, 0.8, 1.2);
         particle->beta  *= std::clamp(1 + generateGaussianPoint_cached() * sqrt(deltaTime) * 0.01, 0.8, 1.2);
@@ -184,10 +199,15 @@ struct alignas(32) Observation {
             double total_sleep_minutes;
             double set_mean_velocity;
             double set_mean_force;
+            double bodyweight;
+            double smoothed_bodyweight;
+            double delta_bw;
+            double active_energy_burned;
+            double basal_energy_burned;
             std::array<double, 3> lift_flags;
             double pad;
         };
-        double vec[10];
+        double vec[15];
     }; 
     Observation() : vec{0} {}
     inline constexpr static std::size_t total_size = sizeof(vec)/sizeof(vec[0]);
@@ -201,3 +221,4 @@ std::ostream& operator<<(std::ostream& os, const Observation& obs);
 std::ostream& operator<<(std::ostream& os, const Action& action);
 pair<double, double> update_geometry(const Particle& p1, const Particle& p2);
 void gaussian_transition(Particle* particles, const Action& action, int num_particles, double dt, GaussianProcess& gp);
+tuple<double, double, double> calculateParameters(Particle* particles, int num_particles);
